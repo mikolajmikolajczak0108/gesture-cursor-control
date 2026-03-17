@@ -63,8 +63,9 @@ class HandGestureController:
         self.cursor_y = current_mouse.y
         self.box_margin = 120  # Inner invisible box limit mapped to physical screen boundaries
         
-        self.is_left_clicking = False
-        self.is_right_clicking = False
+        self.current_gesture = None
+        self.gesture_start_time = None
+        self.action_executed = False
         
         # Start background processing thread
         self.thread = threading.Thread(target=self.process_video, daemon=True)
@@ -187,13 +188,6 @@ class HandGestureController:
                 if th_id not in matched_ids:
                     time_lost = current_time - tracked_hands[th_id].last_seen
                     if time_lost > 3.0:
-                        if tracked_hands[th_id].is_selected:
-                            if self.is_left_clicking:
-                                pyautogui.mouseUp(button='left')
-                                self.is_left_clicking = False
-                            if self.is_right_clicking:
-                                pyautogui.mouseUp(button='right')
-                                self.is_right_clicking = False
                         del tracked_hands[th_id]
                         
             # Execute gestures & logic
@@ -299,66 +293,53 @@ class HandGestureController:
             # --- Click gestures check ---
             if is_any_hand_selected:
                 other_hand_fingers = None
+                other_hand_present = False
                 for th_id in matched_ids:
                     th = tracked_hands[th_id]
                     if not th.is_selected:
                         other_hand_fingers = self.check_fingers(th.landmarks)
+                        other_hand_present = True
                         break
+                        
+                if other_hand_present:
+                    cv2.putText(img_rgb, "SECONDARY STEERING SYSTEM INITIALIZED", (20, 40), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                         
                 if other_hand_fingers is not None:
                     index_ext, middle_ext, ring_ext, pinky_ext = other_hand_fingers
+                    
+                    gesture = None
                     if index_ext and not middle_ext and not ring_ext and not pinky_ext:
-                        if not self.is_left_clicking:
-                            try:
-                                pyautogui.mouseDown(button='left')
-                                self.is_left_clicking = True
-                            except pyautogui.FailSafeException:
-                                pass
-                        if self.is_right_clicking:
-                            try:
-                                pyautogui.mouseUp(button='right')
-                                self.is_right_clicking = False
-                            except pyautogui.FailSafeException:
-                                pass
+                        gesture = 'left'
                     elif index_ext and middle_ext and not ring_ext and not pinky_ext:
-                        if not self.is_right_clicking:
-                            try:
-                                pyautogui.mouseDown(button='right')
-                                self.is_right_clicking = True
-                            except pyautogui.FailSafeException:
-                                pass
-                        if self.is_left_clicking:
-                            try:
-                                pyautogui.mouseUp(button='left')
-                                self.is_left_clicking = False
-                            except pyautogui.FailSafeException:
-                                pass
+                        gesture = 'right'
+                        
+                    if gesture is not None:
+                        if self.current_gesture != gesture:
+                            self.current_gesture = gesture
+                            self.gesture_start_time = time.time()
+                            self.action_executed = False
+                        else:
+                            elapsed = time.time() - self.gesture_start_time
+                            if elapsed >= 1.0 and not self.action_executed:
+                                try:
+                                    pyautogui.click(button=gesture)
+                                    self.action_executed = True
+                                except pyautogui.FailSafeException:
+                                    pass
+                            elif not self.action_executed:
+                                # Show loading for click
+                                load_pct = int(min(1.0, elapsed / 1.0) * 100)
+                                cv2.putText(img_rgb, f"{gesture.upper()} CLICK LOADING: {load_pct}%", (20, 70), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                     else:
-                        if self.is_left_clicking:
-                            try:
-                                pyautogui.mouseUp(button='left')
-                                self.is_left_clicking = False
-                            except pyautogui.FailSafeException:
-                                pass
-                        if self.is_right_clicking:
-                            try:
-                                pyautogui.mouseUp(button='right')
-                                self.is_right_clicking = False
-                            except pyautogui.FailSafeException:
-                                pass
+                        self.current_gesture = None
+                        self.gesture_start_time = None
+                        self.action_executed = False
                 else:
-                    if self.is_left_clicking:
-                        try:
-                            pyautogui.mouseUp(button='left')
-                            self.is_left_clicking = False
-                        except pyautogui.FailSafeException:
-                            pass
-                    if self.is_right_clicking:
-                        try:
-                            pyautogui.mouseUp(button='right')
-                            self.is_right_clicking = False
-                        except pyautogui.FailSafeException:
-                            pass
+                    self.current_gesture = None
+                    self.gesture_start_time = None
+                    self.action_executed = False
                             
             # Deliver to UI thread
             if not self.frame_queue.full():
