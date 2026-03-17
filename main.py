@@ -9,6 +9,7 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import queue
 import sys
+import pyttsx3
 
 # Disable pyautogui safety stops to allow full-screen control smoothly
 pyautogui.PAUSE = 0
@@ -67,6 +68,15 @@ class HandGestureController:
         self.gesture_start_time = None
         self.action_executed = False
         
+        # Audio setup
+        self.speech_queue = queue.Queue()
+        self.speech_thread = threading.Thread(target=self.speech_worker, daemon=True)
+        self.speech_thread.start()
+        
+        self.said_primary = False
+        self.said_secondary = False
+        self.arms_crossed_start_time = None
+        
         # Start background processing thread
         self.thread = threading.Thread(target=self.process_video, daemon=True)
         self.thread.start()
@@ -83,6 +93,24 @@ class HandGestureController:
         self.root.destroy()
         sys.exit(0)
         
+    def speech_worker(self):
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 160)
+        # Try to use a more robotic voice if available
+        voices = engine.getProperty('voices')
+        for voice in voices:
+            if "Zira" in voice.name or "David" in voice.name or "Hazel" in voice.name:
+                engine.setProperty('voice', voice.id)
+                break
+                
+        while self.running:
+            try:
+                msg = self.speech_queue.get(timeout=0.1)
+                engine.say(msg)
+                engine.runAndWait()
+            except queue.Empty:
+                pass
+                
     def update_ui(self):
         """ Pulls newly processed frames from the queued background thread to update Tkinter. """
         if not self.running:
@@ -183,6 +211,50 @@ class HandGestureController:
                         matched_ids.add(new_id)
 
             current_time = time.time()
+            
+            # --- Crossed Arms Heuristic ---
+            crossed_arms_now = False
+            if results.multi_hand_landmarks and len(results.multi_hand_landmarks) == 2:
+                if results.multi_handedness and len(results.multi_handedness) == 2:
+                    hand1_label = results.multi_handedness[0].classification[0].label
+                    hand2_label = results.multi_handedness[1].classification[0].label
+                    
+                    hx1 = results.multi_hand_landmarks[0].landmark[0].x
+                    hx2 = results.multi_hand_landmarks[1].landmark[0].x
+                    
+                    if hand1_label == 'Left' and hand2_label == 'Right':
+                        if hx1 > hx2 + 0.05: # Hands crossed!
+                            crossed_arms_now = True
+                    elif hand1_label == 'Right' and hand2_label == 'Left':
+                        if hx2 > hx1 + 0.05: # Hands crossed!
+                            crossed_arms_now = True
+
+            if crossed_arms_now:
+                if self.arms_crossed_start_time is None:
+                    self.arms_crossed_start_time = time.time()
+                else:
+                    elapsed = time.time() - self.arms_crossed_start_time
+                    cv2.putText(img_rgb, f"SYSTEM SHUTDOWN IN: {max(0.0, 3.0 - elapsed):.1f}S", (w//2 - 200, h - 50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                                
+                    if elapsed >= 3.0:
+                        any_selected = False
+                        for th in tracked_hands.values():
+                            if th.is_selected:
+                                any_selected = True
+                            th.is_selected = False
+                            th.fist_start = None
+                            
+                        if any_selected:
+                            self.speech_queue.put("Steering system offline")
+                            self.said_primary = False
+                            self.said_secondary = False
+                            
+                        self.arms_crossed_start_time = None
+                        status_text = "Steering system offline"
+            else:
+                self.arms_crossed_start_time = None
+
             # Cull tracking for hands that are missing for more than 3 sec
             for th_id in list(tracked_hands.keys()):
                 if th_id not in matched_ids:
@@ -215,6 +287,9 @@ class HandGestureController:
                             oth.is_selected = False
                         th.is_selected = True
                         th.fist_start = None
+                        if not self.said_primary:
+                            self.speech_queue.put("Primary steering system initiated")
+                            self.said_primary = True
                 
                 # Setup render bounding
                 x_list = [int(lm.x * w) for lm in landmarks.landmark]
@@ -231,6 +306,9 @@ class HandGestureController:
                 
             # Perform Drawing & Mouse UI logic Overlays
             is_any_hand_selected = any(th.is_selected for th in tracked_hands.values())
+            if not is_any_hand_selected:
+                self.said_primary = False
+                self.said_secondary = False
             
             selected_th = next((th for th in tracked_hands.values() if th.is_selected), None)
             if selected_th and selected_th.id not in matched_ids:
@@ -300,6 +378,11 @@ class HandGestureController:
                 if other_hand_present:
                     cv2.putText(img_rgb, "SECONDARY STEERING SYSTEM INITIALIZED", (20, 40), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    if not self.said_secondary:
+                        self.speech_queue.put("Secondary system initiated")
+                        self.said_secondary = True
+                else:
+                    self.said_secondary = False
                         
                 if other_hand_fingers is not None:
                     index_ext, middle_ext, ring_ext, pinky_ext = other_hand_fingers
