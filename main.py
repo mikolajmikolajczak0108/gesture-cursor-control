@@ -247,15 +247,11 @@ class HandGestureController:
                     status_text = "Tracking active"
                     b_xmin, b_ymin = max(0, b_xmin), max(0, b_ymin)
                     
-                    cv2.rectangle(img_rgb, (b_xmin, b_ymin), (b_xmax, b_ymax), hand_color, border_thick)
-                    cv2.putText(img_rgb, "CONTROLLING", (b_xmin, max(20, b_ymin - 10)), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, hand_color, 2)
-                                
                     # Mouse coordinate linear extrapolation and limiting
                     index_tip = th.landmarks.landmark[8]
                     ix, iy = int(index_tip.x * w), int(index_tip.y * h)
                     
-                    screen_x = np.interp(ix, [self.box_margin, w - self.box_margin], [0, self.screen_w])
+                    screen_x = np.interp(ix, [self.box_margin, w - self.box_margin], [self.screen_w, 0])
                     screen_y = np.interp(iy, [self.box_margin, h - self.box_margin], [0, self.screen_h])
                     
                     # Low Pass Exponential Smoothing Formula to avoid jitter
