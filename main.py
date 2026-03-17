@@ -213,7 +213,7 @@ class HandGestureController:
             current_time = time.time()
             
             # --- Crossed Arms Heuristic ---
-            crossed_arms_now = False
+            crossed_arms_eval = False
             if results.multi_hand_landmarks and len(results.multi_hand_landmarks) == 2:
                 if results.multi_handedness and len(results.multi_handedness) == 2:
                     hand1_label = results.multi_handedness[0].classification[0].label
@@ -222,12 +222,21 @@ class HandGestureController:
                     hx1 = results.multi_hand_landmarks[0].landmark[0].x
                     hx2 = results.multi_hand_landmarks[1].landmark[0].x
                     
+                    # More forgiving detection distance for overlaps
                     if hand1_label == 'Left' and hand2_label == 'Right':
-                        if hx1 > hx2 + 0.05: # Hands crossed!
-                            crossed_arms_now = True
+                        if hx1 > hx2 - 0.1: 
+                            crossed_arms_eval = True
                     elif hand1_label == 'Right' and hand2_label == 'Left':
-                        if hx2 > hx1 + 0.05: # Hands crossed!
-                            crossed_arms_now = True
+                        if hx2 > hx1 - 0.1: 
+                            crossed_arms_eval = True
+
+            # Tolerance check to prevent stutter drops
+            if crossed_arms_eval:
+                self.last_crossed_time = current_time
+                
+            crossed_arms_now = False
+            if hasattr(self, 'last_crossed_time') and (current_time - self.last_crossed_time) < 1.0:
+                crossed_arms_now = True
 
             if crossed_arms_now:
                 if self.arms_crossed_start_time is None:
@@ -251,6 +260,7 @@ class HandGestureController:
                             self.said_secondary = False
                             
                         self.arms_crossed_start_time = None
+                        self.last_crossed_time = 0  # reset tolerance correctly
                         status_text = "Steering system offline"
             else:
                 self.arms_crossed_start_time = None
